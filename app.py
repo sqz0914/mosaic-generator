@@ -201,7 +201,7 @@ def generate(image: np.ndarray | None, grid_size: float, tile_set_name: str, til
 
     s = score(result.original, result.mosaic)
     perf_summary = (
-        f"### Processing time: {result.elapsed_ms:.1f} ms\n\n"
+        f"### Processing time: {result.elapsed_ms:.2f} ms\n\n"
         f"{tile_set_name} tiles, {result.n_cols} × {result.n_rows} grid, "
         f"{result.original.shape[1]} × {result.original.shape[0]} px working image.\n\n"
         f"### Similarity to the original\n\n"
