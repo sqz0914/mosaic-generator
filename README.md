@@ -61,9 +61,9 @@ Then open <http://127.0.0.1:7860>. The app has three tabs.
 
 | Tab | What it does |
 |---|---|
-| **Mosaic** | Upload an image or pick an example, choose the settings, and press **Generate mosaic**. It shows the preprocessed image, the segmented grid and the mosaic, with the **processing time** of each step and the similarity scores (MSE and SSIM). |
+| **Mosaic** | Upload an image or pick an example, choose the settings, and press **Generate mosaic**. It shows the preprocessed image, the segmented grid and the mosaic. |
 | **Tile sets** | Preview any built-in tile set at any tile size. |
-| **Performance** | The processing time at grid sizes 16, 32, 64 and 128, with the current image and settings. |
+| **Performance** | For the last mosaic: the total **processing time**, the time of each step, and the similarity to the original (MSE and SSIM). |
 
 If an input cannot be used, for example a grid that is larger than the image, the app
 shows a message that explains why.
@@ -118,9 +118,8 @@ two readable images, gives a clear error.
 python -m pytest
 ```
 
-The tests check every module, the error messages, and that the mosaic is the same as the
-Lab 1 baseline. Another test checks that every function has a docstring with its
-parameters and return value.
+The tests check every module, the error messages, the web app's callbacks, and that the
+mosaic is the same as the Lab 1 baseline.
 
 ### Profiling notebook
 

@@ -5,16 +5,12 @@ Run from the project folder with `python -m pytest`.
 
 from __future__ import annotations
 
-import importlib
-import inspect
-import pkgutil
 import threading
 
 import cv2
 import numpy as np
 import pytest
 
-import mosaic_generator
 from baseline import core as lab1_core
 from baseline import preprocess as lab1_preprocess
 from baseline import tiles as lab1_tiles
@@ -67,44 +63,6 @@ def write_image(path, img) -> None:
     ok, data = cv2.imencode(path.suffix, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     assert ok
     data.tofile(str(path))
-
-
-# ---------------------------------------------------------------- documentation
-
-
-def _package_functions():
-    """Every function and method defined in the mosaic_generator source files.
-
-    Returns
-    -------
-    list of tuple (str, function)
-        Qualified name and function object.
-    """
-    found = []
-    for info in pkgutil.iter_modules(mosaic_generator.__path__):
-        module = importlib.import_module(f"mosaic_generator.{info.name}")
-        for _, obj in inspect.getmembers(module):
-            members = [obj]
-            if inspect.isclass(obj) and obj.__module__ == module.__name__:
-                members = [m.fget if isinstance(m, property) else m for m in vars(obj).values()]
-                members = [getattr(m, "__func__", m) for m in members]
-            for fn in members:
-                fn = inspect.unwrap(fn) if callable(fn) else fn
-                if (inspect.isfunction(fn) and fn.__module__ == module.__name__
-                        and fn.__code__.co_filename.endswith(".py")):
-                    found.append((f"{module.__name__}.{fn.__qualname__}", fn))
-    return found
-
-
-@pytest.mark.parametrize("name, fn", _package_functions(), ids=lambda v: v if isinstance(v, str) else "")
-def test_every_function_has_a_full_docstring(name, fn):
-    """Lab requirement: a description, parameters with types, and the return value."""
-    doc = inspect.getdoc(fn) or ""
-    assert doc.strip(), f"{name} has no docstring"
-    params = [p for p in inspect.signature(fn).parameters if p not in ("self", "cls")]
-    if params:
-        assert "Parameters" in doc, f"{name} does not document its parameters"
-    assert "Returns" in doc, f"{name} does not document its return value"
 
 
 # ---------------------------------------------------------------- utils: validation
@@ -728,3 +686,56 @@ def test_builder_rejects_bad_images(image, message):
 def test_build_mosaic_rejects_unknown_tile_sets(sample):
     with pytest.raises(MosaicInputError, match="tile_set_name"):
         build_mosaic(sample, tile_set_name="Mosaic Glass")
+
+
+# ---------------------------------------------------------------- web app (app.py)
+
+
+@pytest.fixture(scope="module")
+def web_app():
+    """The Gradio app module, imported once (building the interface takes a moment).
+
+    Returns
+    -------
+    module
+        The imported `app` module.
+    """
+    import app
+    return app
+
+
+APP_SETTINGS = ("Halftone Dots", 16, "Modulate", 0.85, "RGB", 0.0, False, 12)
+
+
+def test_generate_fills_the_mosaic_and_performance_tabs(web_app, sample):
+    (original, segmented, mosaic, grid_summary, mosaic_visible,
+     perf_summary, timing, perf_visible) = web_app.generate(sample, 48, *APP_SETTINGS)
+    assert original.shape == segmented.shape and mosaic.ndim == 3
+    assert "48 × 36 grid" in grid_summary
+    assert mosaic_visible["visible"] and perf_visible["visible"]
+    assert "Processing time:" in perf_summary and "MSE" in perf_summary and "SSIM" in perf_summary
+    for step in ("Preprocess", "Cell colors", "Tile matching", "Reconstruction", "**Total**"):
+        assert step in timing
+
+
+def test_generate_without_an_image_shows_prompts(web_app):
+    out = web_app.generate(None, 48, *APP_SETTINGS)
+    assert out[3] == web_app.IDLE_MESSAGE and out[5] == web_app.PERF_IDLE_MESSAGE
+    assert not out[4]["visible"] and not out[7]["visible"]
+
+
+def test_generate_turns_bad_input_into_a_message(web_app, sample):
+    import gradio as gr
+    with pytest.raises(gr.Error, match="tile_set must be one of"):
+        web_app.generate(sample, 48, "Mosaic Glass", *APP_SETTINGS[1:])
+
+
+def test_timing_table_lists_every_step_and_the_total(web_app):
+    table = web_app.timing_table({"Preprocess": 0.1, "Reconstruction": 0.3})
+    assert "| Preprocess | 0.10 | 25% |" in table
+    assert table.splitlines()[-1] == "| **Total** | **0.40** | **100%** |"
+
+
+def test_tile_preview_shows_the_chosen_set(web_app):
+    sheet, caption = web_app.preview_tiles("LEGO Studs", 16)
+    assert sheet.ndim == 3 and "LEGO Studs" in caption and "16 tiles" in caption

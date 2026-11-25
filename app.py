@@ -4,10 +4,10 @@ Run locally:       python app.py
 With hot reload:   gradio app.py
 
 Three tabs:
-* Mosaic       -- upload an image, choose the settings, see the mosaic, its similarity
-                  scores and how long each processing step took.
+* Mosaic       -- upload an image, choose the settings, and see the mosaic.
 * Tile sets    -- preview any built-in tile set at any resolution.
-* Performance  -- processing time across grid sizes, with the current settings.
+* Performance  -- processing time of the last mosaic (total and per step), and how
+                  similar it is to the original (MSE and SSIM).
 """
 
 from __future__ import annotations
@@ -32,9 +32,18 @@ from mosaic_generator import (
 )
 
 IDLE_MESSAGE = "_Upload an image or pick an example, then press **Generate mosaic**._"
-PERF_IDLE_MESSAGE = "_Press **Generate mosaic** on the Mosaic tab to measure the processing time._"
-PERF_GRID_SIZES = (16, 32, 64, 128)
-PERF_REPEATS = 5
+
+# Markdown tables are only as wide as their content; stretch the Performance tables to
+# the full width, like the images on the other tabs.
+CSS = ".full-width-tables table { width: 100%; }"
+
+# Image heights on the Mosaic tab, in pixels. The two preview images, the mosaic and the
+# one-line summary below it add up to the height of the controls column (with "Color"
+# open and "Advanced" closed, the default), so both columns start and end together.
+INPUT_HEIGHT = 260
+PREVIEW_HEIGHT = 240
+MOSAIC_HEIGHT = 700
+PERF_IDLE_MESSAGE = "_Generate a mosaic on the **Mosaic** tab to see its processing time and quality._"
 
 
 # --------------------------------------------------------------------------------------
@@ -150,7 +159,7 @@ def example_images() -> list[str]:
 def generate(image: np.ndarray | None, grid_size: float, tile_set_name: str, tile_px: float,
              color_mode: str, strength: float, match_space: str, detail_weight: float,
              use_quantization: bool, quantize_k: float):
-    """Build the mosaic and everything shown beside it (Mosaic tab).
+    """Build the mosaic and fill both the Mosaic and the Performance tab.
 
     Parameters
     ----------
@@ -163,8 +172,10 @@ def generate(image: np.ndarray | None, grid_size: float, tile_set_name: str, til
     Returns
     -------
     tuple
-        (original, segmented, mosaic, summary markdown, timing markdown,
+        Mosaic tab: (original, segmented, mosaic, grid summary markdown,
         results-panel visibility update).
+        Performance tab: (processing time and quality markdown, per-step timing
+        markdown, results-panel visibility update).
 
     Raises
     ------
@@ -172,7 +183,8 @@ def generate(image: np.ndarray | None, grid_size: float, tile_set_name: str, til
         With the validation message, if the image or a setting cannot be used.
     """
     if image is None:                       # a prompt, not an error pop-up
-        return None, None, None, IDLE_MESSAGE, "", gr.update(visible=False)
+        return (None, None, None, IDLE_MESSAGE, gr.update(visible=False),
+                PERF_IDLE_MESSAGE, "", gr.update(visible=False))
 
     try:
         builder = make_builder(grid_size, tile_set_name, tile_px, color_mode, strength,
@@ -181,62 +193,26 @@ def generate(image: np.ndarray | None, grid_size: float, tile_set_name: str, til
     except MosaicInputError as err:
         raise gr.Error(str(err)) from err
 
-    s = score(result.original, result.mosaic)
-    summary = (
-        f"**Processing time: {result.elapsed_ms:.1f} ms** &nbsp;·&nbsp; "
-        f"{result.n_cols} × {result.n_rows} grid ({result.n_rows * result.n_cols:,} cells) "
+    grid_summary = (
+        f"**{result.n_cols} × {result.n_rows} grid** ({result.n_rows * result.n_cols:,} cells) "
         f"&nbsp;·&nbsp; {result.cell_px} px cells → {result.tile_px} px tiles &nbsp;·&nbsp; "
-        f"output {result.mosaic_full.shape[1]} × {result.mosaic_full.shape[0]} px\n\n"
-        f"Similarity to the original: **MSE {s.mse:,.0f}** (lower is better) &nbsp;·&nbsp; "
-        f"**SSIM {s.ssim:.4f}** (higher is better; 1.0 is identical)"
+        f"output {result.mosaic_full.shape[1]} × {result.mosaic_full.shape[0]} px"
     )
-    return (result.original, result.segmented, result.mosaic_full, summary,
-            timing_table(result.stages_ms), gr.update(visible=True))
 
+    s = score(result.original, result.mosaic)
+    perf_summary = (
+        f"### Processing time: {result.elapsed_ms:.1f} ms\n\n"
+        f"{tile_set_name} tiles, {result.n_cols} × {result.n_rows} grid, "
+        f"{result.original.shape[1]} × {result.original.shape[0]} px working image.\n\n"
+        f"### Similarity to the original\n\n"
+        f"| Metric | Value | Meaning |\n|---|---:|---|\n"
+        f"| MSE | {s.mse:,.0f} | lower is better; 0 is identical |\n"
+        f"| SSIM | {s.ssim:.4f} | higher is better; 1.0 is identical |"
+    )
 
-def measure_processing_time(image: np.ndarray | None, tile_set_name: str, tile_px: float,
-                            color_mode: str, strength: float, match_space: str,
-                            detail_weight: float, use_quantization: bool, quantize_k: float):
-    """Measure the processing time across grid sizes (Performance tab).
-
-    Each grid size is built once to warm up, then `PERF_REPEATS` times; the table shows
-    the median time of each step.
-
-    Parameters
-    ----------
-    image : np.ndarray or None
-        The uploaded image, or None if nothing is uploaded yet.
-    tile_set_name, tile_px, color_mode, strength, match_space, detail_weight,
-    use_quantization, quantize_k
-        Values of the Mosaic tab's controls (see `make_builder`).
-
-    Returns
-    -------
-    tuple
-        (table rows, status markdown, results-panel visibility update).
-    """
-    if image is None:
-        return [], PERF_IDLE_MESSAGE, gr.update(visible=False)
-
-    rows = []
-    for grid in PERF_GRID_SIZES:            # one row per grid size in the table (4 sizes)
-        try:
-            builder = make_builder(grid, tile_set_name, tile_px, color_mode, strength,
-                                   match_space, detail_weight, use_quantization, quantize_k)
-            builder.build(image)            # warm-up
-            runs = [builder.build(image) for _ in range(PERF_REPEATS)]
-        except MosaicInputError as err:     # e.g. the image is too small for this grid
-            rows.append([f"{grid}", "—", f"skipped: {err}", "", "", "", ""])
-            continue
-        stages = {name: float(np.median([r.stages_ms[name] for r in runs]))
-                  for name in runs[0].stages_ms}
-        rows.append([f"{grid}", f"{runs[0].n_rows * runs[0].n_cols:,}",
-                     f"{sum(stages.values()):.2f}"] + [f"{ms:.2f}" for ms in stages.values()])
-
-    status = (f"Median of {PERF_REPEATS} runs on a {image.shape[1]} × {image.shape[0]} image "
-              f"at a {config.DEFAULT_LONG_EDGE} px working resolution, {tile_set_name} tiles "
-              f"at {int(tile_px)} px.")
-    return rows, status, gr.update(visible=True)
+    return (result.original, result.segmented, result.mosaic_full, grid_summary,
+            gr.update(visible=True),
+            perf_summary, timing_table(result.stages_ms), gr.update(visible=True))
 
 
 def preview_tiles(tile_set_name: str, tile_px: float):
@@ -263,6 +239,10 @@ def preview_tiles(tile_set_name: str, tile_px: float):
 # Interface
 # --------------------------------------------------------------------------------------
 
+g_min, g_max, g_step = config.UI_GRID_RANGE
+t_min, t_max, t_step = config.UI_TILE_PX_RANGE
+k_min, k_max, k_step = config.UI_PALETTE_RANGE
+
 with gr.Blocks(title="Image Mosaic Generator") as demo:
     gr.Markdown(
         "# Image Mosaic Generator\n"
@@ -273,15 +253,12 @@ with gr.Blocks(title="Image Mosaic Generator") as demo:
     with gr.Tab("Mosaic"):
         with gr.Row():
             with gr.Column(scale=1):
-                image_in = gr.Image(label="Input image", type="numpy", height=260,
+                image_in = gr.Image(label="Input image", type="numpy", height=INPUT_HEIGHT,
                                     sources=["upload", "clipboard"])
                 examples = example_images()
                 if examples:
                     gr.Examples(examples, inputs=image_in, label="Example images")
 
-                g_min, g_max, g_step = config.UI_GRID_RANGE
-                t_min, t_max, t_step = config.UI_TILE_PX_RANGE
-                k_min, k_max, k_step = config.UI_PALETTE_RANGE
                 grid_size = gr.Slider(g_min, g_max, value=config.DEFAULT_GRID_SIZE, step=g_step,
                                       label="Grid size (cells across)")
                 tile_set_name = gr.Dropdown(TILE_SETS, value=config.DEFAULT_TILE_SET, label="Tile set")
@@ -306,14 +283,15 @@ with gr.Blocks(title="Image Mosaic Generator") as demo:
                 run_btn = gr.Button("Generate mosaic", variant="primary")
 
             with gr.Column(scale=2):
-                summary = gr.Markdown(IDLE_MESSAGE)
-                with gr.Column(visible=False) as results:
+                with gr.Column(visible=False) as mosaic_results:
                     with gr.Row():
-                        original_out = gr.Image(label="1 · Original (preprocessed)", height=240)
-                        segmented_out = gr.Image(label="2 · Segmented grid", height=240)
-                    mosaic_out = gr.Image(label="3 · Mosaic", height=460)
-                    with gr.Accordion("Processing time by step", open=True):
-                        timing_out = gr.Markdown()
+                        original_out = gr.Image(label="1 · Original (preprocessed)",
+                                                height=PREVIEW_HEIGHT)
+                        segmented_out = gr.Image(label="2 · Segmented grid", height=PREVIEW_HEIGHT)
+                    mosaic_out = gr.Image(label="3 · Mosaic", height=MOSAIC_HEIGHT)
+                # Below the images, so the images line up with the top of the input image.
+                # Before the first mosaic it is the only thing here and shows the prompt.
+                grid_out = gr.Markdown(IDLE_MESSAGE)
 
     with gr.Tab("Tile sets"):
         gr.Markdown(
@@ -329,27 +307,19 @@ with gr.Blocks(title="Image Mosaic Generator") as demo:
         preview_out = gr.Image(label="Tiles, ordered by brightness", height=380)
 
     with gr.Tab("Performance"):
-        gr.Markdown(
-            "How long the mosaic takes to build at different grid sizes, using the Mosaic "
-            "tab's image and settings. Runs whenever you generate a mosaic."
-        )
-        perf_status = gr.Markdown(PERF_IDLE_MESSAGE)
+        perf_out = gr.Markdown(PERF_IDLE_MESSAGE, elem_classes="full-width-tables")
         with gr.Column(visible=False) as perf_results:
-            perf_table = gr.Dataframe(
-                headers=["Grid", "Cells", "Total (ms)", "Preprocess (ms)", "Cell colors (ms)",
-                         "Tile matching (ms)", "Reconstruction (ms)"],
-                interactive=False, label="Processing time (median)",
-            )
+            gr.Markdown("### Processing time by step")
+            timing_out = gr.Markdown(elem_classes="full-width-tables")
 
     # ---------------------------------------------------------------- wiring
 
-    settings = [tile_set_name, tile_px, color_mode, strength, match_space, detail_weight,
-                use_quantization, quantize_k]
-    mosaic_outputs = [original_out, segmented_out, mosaic_out, summary, timing_out, results]
-
-    # The timing sweep runs after the mosaic, so the mosaic appears first.
-    run_btn.click(generate, [image_in, grid_size] + settings, mosaic_outputs).then(
-        measure_processing_time, [image_in] + settings, [perf_table, perf_status, perf_results]
+    run_btn.click(
+        generate,
+        [image_in, grid_size, tile_set_name, tile_px, color_mode, strength, match_space,
+         detail_weight, use_quantization, quantize_k],
+        [original_out, segmented_out, mosaic_out, grid_out, mosaic_results,
+         perf_out, timing_out, perf_results],
     )
 
     preview_name.change(preview_tiles, [preview_name, preview_px], [preview_out, preview_caption])
@@ -358,4 +328,4 @@ with gr.Blocks(title="Image Mosaic Generator") as demo:
 
 
 if __name__ == "__main__":
-    demo.launch(theme=gr.themes.Soft())
+    demo.launch(theme=gr.themes.Soft(), css=CSS)
