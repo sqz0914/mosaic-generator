@@ -17,7 +17,7 @@ rebuilds the image out of tiles. It is the Lab 1 mosaic generator, profiled, opt
 and refactored into a package in Lab 8. On a 512×512 image with a 32×32 grid, it is
 **31.5× faster** than my Lab 1 baseline and makes the same mosaic.
 
-**▶ Live demo:** <https://huggingface.co/spaces/sqz0914/image-mosaic-generator>
+**▶ Live demo:** <https://huggingface.co/spaces/sqz0914/mosaic-generator>
 
 The Space sleeps when nobody uses it, so the first visit can take about half a minute.
 
