@@ -1,0 +1,18 @@
+# Python 3.12 or newer (numpy 2.5.3 requires it).
+
+# Web app and mosaic package
+gradio==6.28.0
+numpy==2.5.3
+opencv-python==5.0.0.93
+scikit-image==0.26.0
+scipy==1.18.1
+pillow==12.3.0
+
+# Notebook (profiling_analysis.ipynb)
+matplotlib==3.10.7
+pandas==3.1.1
+line_profiler==5.1.0
+ipykernel==7.4.0
+
+# Tests
+pytest==8.4.2
